@@ -31,6 +31,7 @@
 #include <chrono>              //NOLINT
 #include <condition_variable>  //NOLINT
 #include <ctime>
+#include <memory>
 #include <string>
 #include <thread>  //NOLINT
 #include <vector>
@@ -43,12 +44,16 @@
 #include "keyvi/index/internal/base_index_reader.h"
 #include "keyvi/index/internal/index_writer_worker.h"
 #include "keyvi/index/internal/segment.h"
+#include "keyvi/index/types.h"
 
 // #define ENABLE_TRACING
 #include "keyvi/dictionary/util/trace.h"
 
 namespace keyvi {
 namespace index {
+namespace unit_test {
+class IndexFriend;
+}
 
 class Index final : public internal::BaseIndexReader<internal::IndexWriterWorker, internal::Segment> {
  public:
@@ -88,16 +93,23 @@ class Index final : public internal::BaseIndexReader<internal::IndexWriterWorker
 
   void Set(const std::string& key, const std::string& value) { Payload().Add(key, value); }
 
-  void Delete(const std::string& key) { Payload().Delete(key); }
-
-  void Flush() {
-    TRACE("Flush (manually)");
-    Payload().Flush();
+  template <typename ContainerType>
+  void MSet(const std::shared_ptr<ContainerType>& key_values) {
+    Payload().Add(key_values);
   }
 
-  void FlushAsync() {
+  void Delete(const std::string& key) { Payload().Delete(key); }
+
+  void Flush(const bool async = false) {
     TRACE("Flush (manually)");
-    Payload().FlushAsync();
+    Payload().Flush(async);
+  }
+
+  void ForceMerge(const size_t max_segments = 1) {
+    if (max_segments < 1) {
+      throw std::invalid_argument("max_segments must be > 1");
+    }
+    Payload().ForceMerge(max_segments);
   }
 
  private:
@@ -105,6 +117,9 @@ class Index final : public internal::BaseIndexReader<internal::IndexWriterWorker
   boost::filesystem::path index_toc_file_;
   std::ofstream lock_file_;
   boost::interprocess::file_lock index_lock_;
+
+  // friend for unit testing only
+  friend class unit_test::IndexFriend;
 };
 
 } /* namespace index */

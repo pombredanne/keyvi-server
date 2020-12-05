@@ -1,4 +1,4 @@
-/* keyvi - A key value store.
+/* keyviserver - A key value store server based on keyvi.
  *
  * Copyright 2019 Hendrik Muhs<hendrik.muhs@gmail.com>
  *
@@ -25,27 +25,42 @@
 #ifndef KEYVI_SERVER_SERVICE_INDEX_IMPL_H_
 #define KEYVI_SERVER_SERVICE_INDEX_IMPL_H_
 
-#include "index.pb.h"  //NOLINT
-
 #include <keyvi/index/index.h>
 
 #include <string>
+
+#include "index.pb.h"  //NOLINT
+#include "keyvi_server/core/data_backend.h"
 
 namespace keyvi_server {
 namespace service {
 
 class IndexImpl : public Index {
  public:
-  explicit IndexImpl(std::string name);
+  explicit IndexImpl(const keyvi_server::core::data_backend_t& backend);
   ~IndexImpl();
 
-  void Get(google::protobuf::RpcController* cntl_base, const GetRequest* request, GetResponse* response,
+  void Delete(google::protobuf::RpcController* cntl_base, const DeleteRequest* request, EmptyBodyResponse* response,
+              google::protobuf::Closure* done);
+  void Contains(google::protobuf::RpcController* cntl_base, const ContainsRequest* request, ContainsResponse* response,
+                google::protobuf::Closure* done);
+  void Info(google::protobuf::RpcController* cntl_base, const InfoRequest* request, InfoResponse* response,
+            google::protobuf::Closure* done);
+  void Get(google::protobuf::RpcController* cntl_base, const GetRequest* request, StringValueResponse* response,
            google::protobuf::Closure* done);
-  void Set(google::protobuf::RpcController* cntl_base, const SetRequest* request, SetResponse* response,
+  void GetRaw(google::protobuf::RpcController* cntl_base, const GetRawRequest* request, StringValueResponse* response,
+              google::protobuf::Closure* done);
+  void Set(google::protobuf::RpcController* cntl_base, const SetRequest* request, EmptyBodyResponse* response,
            google::protobuf::Closure* done);
+  void MSet(google::protobuf::RpcController* cntl_base, const MSetRequest* request, EmptyBodyResponse* response,
+            google::protobuf::Closure* done);
+  void Flush(google::protobuf::RpcController* cntl_base, const FlushRequest* request, EmptyBodyResponse* response,
+             google::protobuf::Closure* done);
+  void ForceMerge(google::protobuf::RpcController* cntl_base, const ForceMergeRequest* request,
+                  EmptyBodyResponse* response, google::protobuf::Closure* done);
 
  private:
-  keyvi::index::Index index_;
+  keyvi_server::core::data_backend_t backend_;
 };
 }  // namespace service
 }  // namespace keyvi_server

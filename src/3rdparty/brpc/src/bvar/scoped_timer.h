@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Author: Ge,Jun (gejun@baidu.com)
 // Date: Fri Jul 14 11:29:21 CST 2017
 
 #ifndef  BVAR_SCOPED_TIMER_H
@@ -52,7 +51,7 @@ public:
 
 private:
     DISALLOW_COPY_AND_ASSIGN(ScopedTimer);
-    const int64_t _start_time;
+    int64_t _start_time;
     T* _bvar;
 };
 } // namespace bvar

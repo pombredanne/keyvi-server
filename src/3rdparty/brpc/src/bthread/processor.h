@@ -17,15 +17,20 @@
 
 // bthread - A M:N threading library to make applications more concurrent.
 
-// Author: Ge,Jun (gejun@baidu.com)
 // Date: Fri Dec  5 13:40:57 CST 2014
 
 #ifndef BTHREAD_PROCESSOR_H
 #define BTHREAD_PROCESSOR_H
 
+#include "butil/build_config.h"
+
 // Pause instruction to prevent excess processor bus usage, only works in GCC
 # ifndef cpu_relax
+#if defined(ARCH_CPU_ARM_FAMILY)
+# define cpu_relax() asm volatile("yield\n": : :"memory")
+#else
 # define cpu_relax() asm volatile("pause\n": : :"memory")
+#endif
 # endif
 
 // Compile read-write barrier

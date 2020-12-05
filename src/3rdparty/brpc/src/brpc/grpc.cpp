@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Authors: Jiashun Zhu(zhujiashun@bilibili.com)
 
 
 #include <sstream>                  // std::stringstream
@@ -39,7 +38,7 @@ const char* GrpcStatusToString(GrpcStatus s) {
         case GRPC_PERMISSIONDENIED: return "GRPC_PERMISSIONDENIED";
         case GRPC_RESOURCEEXHAUSTED: return "GRPC_RESOURCEEXHAUSTED";
         case GRPC_FAILEDPRECONDITION: return "GRPC_FAILEDPRECONDITION";
-        case GPRC_ABORTED: return "GPRC_ABORTED";
+        case GRPC_ABORTED: return "GRPC_ABORTED";
         case GRPC_OUTOFRANGE: return "GRPC_OUTOFRANGE";
         case GRPC_UNIMPLEMENTED: return "GRPC_UNIMPLEMENTED";
         case GRPC_INTERNAL: return "GRPC_INTERNAL";
@@ -101,7 +100,7 @@ int GrpcStatusToErrorCode(GrpcStatus grpc_status) {
     case GRPC_RESOURCEEXHAUSTED:
         return ELIMIT;
     case GRPC_FAILEDPRECONDITION:
-    case GPRC_ABORTED:
+    case GRPC_ABORTED:
     case GRPC_OUTOFRANGE:
          return EINTERNAL;
     case GRPC_UNIMPLEMENTED:

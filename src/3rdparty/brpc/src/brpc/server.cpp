@@ -15,9 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Authors: Ge,Jun (gejun@baidu.com)
-//          Rujie Jiang(jiangrujie@baidu.com)
-//          Zhangyi Chen(chenzhangyi01@baidu.com)
 
 #include <wordexp.h>                                // wordexp
 #include <iomanip>
@@ -142,7 +139,8 @@ ServerOptions::ServerOptions()
     , has_builtin_services(true)
     , http_master_service(NULL)
     , health_reporter(NULL)
-    , rtmp_service(NULL) {
+    , rtmp_service(NULL)
+    , redis_service(NULL) {
     if (s_ncore > 0) {
         num_threads = s_ncore + 1;
     }
@@ -157,6 +155,7 @@ ServerSSLOptions* ServerOptions::mutable_ssl_options() {
 
 Server::MethodProperty::OpaqueParams::OpaqueParams()
     : is_tabbed(false)
+    , allow_default_url(false)
     , allow_http_body_to_pb(true)
     , pb_bytes_to_base64(false) {
 }
@@ -435,6 +434,9 @@ Server::~Server() {
         delete _options.auth;
         _options.auth = NULL;
     }
+
+    delete _options.redis_service;
+    _options.redis_service = NULL;
 }
 
 int Server::AddBuiltinServices() {
@@ -1206,6 +1208,7 @@ int Server::AddServiceInternal(google::protobuf::Service* service,
         mp.is_builtin_service = is_builtin_service;
         mp.own_method_status = true;
         mp.params.is_tabbed = !!tabbed;
+        mp.params.allow_default_url = svc_opt.allow_default_url;
         mp.params.allow_http_body_to_pb = svc_opt.allow_http_body_to_pb;
         mp.params.pb_bytes_to_base64 = svc_opt.pb_bytes_to_base64;
         mp.service = service;
@@ -1292,6 +1295,7 @@ int Server::AddServiceInternal(google::protobuf::Service* service,
                 }
                 MethodProperty::OpaqueParams params;
                 params.is_tabbed = !!tabbed;
+                params.allow_default_url = svc_opt.allow_default_url;
                 params.allow_http_body_to_pb = svc_opt.allow_http_body_to_pb;
                 params.pb_bytes_to_base64 = svc_opt.pb_bytes_to_base64;
                 if (!_global_restful_map->AddMethod(
@@ -1329,6 +1333,7 @@ int Server::AddServiceInternal(google::protobuf::Service* service,
             }
             MethodProperty::OpaqueParams params;
             params.is_tabbed = !!tabbed;
+            params.allow_default_url = svc_opt.allow_default_url;
             params.allow_http_body_to_pb = svc_opt.allow_http_body_to_pb;
             params.pb_bytes_to_base64 = svc_opt.pb_bytes_to_base64;
             if (!m->AddMethod(mappings[i].path, service, params,
@@ -1383,6 +1388,7 @@ int Server::AddServiceInternal(google::protobuf::Service* service,
 
 ServiceOptions::ServiceOptions()
     : ownership(SERVER_DOESNT_OWN_SERVICE)
+    , allow_default_url(false)
     , allow_http_body_to_pb(true)
 #ifdef BAIDU_INTERNAL
     , pb_bytes_to_base64(false)
@@ -1400,11 +1406,13 @@ int Server::AddService(google::protobuf::Service* service,
 
 int Server::AddService(google::protobuf::Service* service,
                        ServiceOwnership ownership,
-                       const butil::StringPiece& restful_mappings) {
+                       const butil::StringPiece& restful_mappings,
+                       bool allow_default_url) {
     ServiceOptions options;
     options.ownership = ownership;
     // TODO: This is weird
     options.restful_mappings = restful_mappings.as_string();
+    options.allow_default_url = allow_default_url;
     return AddServiceInternal(service, false, options);
 }
 
@@ -1588,7 +1596,8 @@ void Server::GenerateVersionIfNeeded() {
     if (!_version.empty()) {
         return;
     }
-    int extra_count = !!_options.nshead_service + !!_options.rtmp_service + !!_options.thrift_service;
+    int extra_count = !!_options.nshead_service + !!_options.rtmp_service +
+        !!_options.thrift_service + !!_options.redis_service;
     _version.reserve((extra_count + service_count()) * 20);
     for (ServiceMap::const_iterator it = _fullname_service_map.begin();
          it != _fullname_service_map.end(); ++it) {
@@ -1620,6 +1629,13 @@ void Server::GenerateVersionIfNeeded() {
             _version.push_back('+');
         }
         _version.append(butil::class_name_str(*_options.rtmp_service));
+    }
+
+    if (_options.redis_service) {
+        if (!_version.empty()) {
+            _version.push_back('+');
+        }
+        _version.append(butil::class_name_str(*_options.redis_service));
     }
 }
 
@@ -1660,7 +1676,7 @@ void Server::PutPidFileIfNeeded() {
             return;
         }
     }
-    int fd = open(_options.pid_file.c_str(), O_WRONLY | O_CREAT, 0666);
+    int fd = open(_options.pid_file.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0666);
     if (fd < 0) {
         LOG(WARNING) << "Fail to open " << _options.pid_file;
         _options.pid_file.clear();

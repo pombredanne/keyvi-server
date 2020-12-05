@@ -37,6 +37,7 @@
 #include <mutex>  //NOLINT
 #include <string>
 #include <thread>  //NOLINT
+#include <utility>
 #include <vector>
 
 #include <boost/filesystem.hpp>
@@ -54,6 +55,7 @@
 #include "keyvi/index/internal/merge_job.h"
 #include "keyvi/index/internal/merge_policy_selector.h"
 #include "keyvi/index/internal/segment.h"
+#include "keyvi/index/types.h"
 #include "keyvi/util/active_object.h"
 #include "keyvi/util/configuration.h"
 
@@ -89,6 +91,7 @@ class IndexWriterWorker final {
     compiler_t compiler_;
     std::atomic_size_t write_counter_;
     segments_t segments_;
+    std::weak_ptr<segment_vec_t> segments_weak_;
     std::mutex mutex_;
     const boost::filesystem::path index_directory_;
     const boost::filesystem::path index_toc_file_;
@@ -130,10 +133,11 @@ class IndexWriterWorker final {
   }
 
   const_segments_t Segments() {
-    segments_t segments = segments_weak_.lock();
+    segments_t segments = payload_.segments_weak_.lock();
     if (!segments) {
+      TRACE("recreate segments weak ptr");
       std::unique_lock<std::mutex> lock(payload_.mutex_);
-      segments_weak_ = payload_.segments_;
+      payload_.segments_weak_ = payload_.segments_;
       segments = payload_.segments_;
     }
     return segments;
@@ -142,19 +146,31 @@ class IndexWriterWorker final {
   // todo: rvalue version??
   void Add(const std::string& key, const std::string& value) {
     // push function
-    compiler_active_object_([key, value](IndexPayload& payload) {
-      // todo non-lazy?
-      if (!payload.compiler_) {
-        TRACE("recreate compiler");
-        keyvi::util::parameters_t params =
-            keyvi::util::parameters_t{{STABLE_INSERTS, "true"}, {"memory_limit_mb", "5"}};
+    TRACE("add key %s, pt: %p", key.c_str(), &key);
 
-        payload.compiler_.reset(new dictionary::JsonDictionaryCompilerSmallData(params));
-      }
-      TRACE("add key %s", key.c_str());
+    // strings are copied
+    compiler_active_object_([key, value](IndexPayload& payload) {
+      CreateCompilerIfNeeded(&payload);
+      TRACE("add_async key %s, pt: %p", key.c_str(), &key);
       payload.compiler_->Add(key, value);
     });
 
+    CompileIfThresholdIsHit();
+  }
+
+  template <typename ContainerType>
+  void Add(const std::shared_ptr<ContainerType>& key_values) {
+    TRACE("bulk add keys: %ul", key_values->size());
+
+    // the shared pointer is copied (not the key/values)
+    compiler_active_object_([key_values](IndexPayload& payload) {
+      CreateCompilerIfNeeded(&payload);
+
+      for (auto key_value : *key_values) {
+        TRACE("add_async key %s, pt: %p", key_value.first.c_str(), &key_value.first);
+        payload.compiler_->Add(key_value.first, key_value.second);
+      }
+    });
     CompileIfThresholdIsHit();
   }
 
@@ -178,40 +194,55 @@ class IndexWriterWorker final {
   }
 
   /**
-   * FlushAsync for external use.
-   */
-  void FlushAsync() {
-    TRACE("flush");
-
-    compiler_active_object_([](IndexPayload& payload) {
-      PersistDeletes(&payload);
-      Compile(&payload);
-    });
-  }
-
-  /**
    * Flush for external use.
    */
-  void Flush() {
+  void Flush(const bool async = false) {
     TRACE("flush");
 
-    std::mutex m;
-    std::condition_variable c;
-    std::unique_lock<std::mutex> lock(m);
+    if (async) {
+      compiler_active_object_([](IndexPayload& payload) {
+        PersistDeletes(&payload);
+        Compile(&payload);
+      });
+    } else {
+      std::mutex m;
+      std::condition_variable c;
+      std::unique_lock<std::mutex> lock(m);
 
-    compiler_active_object_([&m, &c](IndexPayload& payload) {
-      PersistDeletes(&payload);
-      Compile(&payload);
-      std::unique_lock<std::mutex> waitLock(m);
-      c.notify_all();
-    });
+      compiler_active_object_([&m, &c](IndexPayload& payload) {
+        PersistDeletes(&payload);
+        Compile(&payload);
+        std::unique_lock<std::mutex> waitLock(m);
+        c.notify_all();
+      });
 
-    c.wait(lock);
+      c.wait(lock);
+    }
+  }
+
+  void ForceMerge(const size_t max_segments) {
+    TRACE("force merge");
+
+    // 1st check the queue and empty it if necessary
+    if (compiler_active_object_.Size() > 0) {
+      Flush();
+    }
+
+    // spin until we reach the desired size
+    while (payload_.segments_->size() > max_segments) {
+      // wait some time for segments being merged
+      // todo improve this dependent on number and size of segments
+      std::this_thread::sleep_for(std::chrono::milliseconds(SPINLOCK_WAIT_FOR_SEGMENT_MERGES_MS));
+
+      // should we somehow got new data, flush again
+      if (compiler_active_object_.Size() > 0) {
+        Flush();
+      }
+    }
   }
 
  private:
   IndexPayload payload_;
-  std::weak_ptr<segment_vec_t> segments_weak_;
   merge_policy_t merge_policy_;
   util::ActiveObject<IndexPayload> compiler_active_object_;
 
@@ -293,9 +324,19 @@ class IndexWriterWorker final {
           }
           WriteToc(&payload_);
 
+          // reset as segments have been changed
+          payload_.segments_weak_.reset();
+
           // delete old segment files
           for (const segment_t& s : p.Segments()) {
             TRACE("delete old file: %s", s->GetDictionaryFilename().c_str());
+
+            // if the segment is somehow used, ensure file handles have access to it
+            // this should be safe because we swapped the old segments out and reseted the weak ptr
+            if (s.use_count() > 1) {
+              s->Load();
+            }
+            // if there are open file handles the OS defers real deletion for us
             s->RemoveFiles();
           }
 
@@ -347,7 +388,9 @@ class IndexWriterWorker final {
     }
 
     payload_.merge_jobs_.emplace_back(to_merge, merge_policy_id, p, payload_.settings_);
-    payload_.merge_jobs_.back().Run();
+
+    // force external merge if low on filedescriptors
+    payload_.merge_jobs_.back().Run(payload_.segments_->size() + to_merge.size() + 10 > payload_.max_segments_);
   }
 
   void LoadIndex() {
@@ -387,6 +430,15 @@ class IndexWriterWorker final {
     payload->any_delete_ = false;
   }
 
+  static inline void CreateCompilerIfNeeded(IndexPayload* payload) {
+    if (!payload->compiler_) {
+      TRACE("recreate compiler");
+      keyvi::util::parameters_t params = keyvi::util::parameters_t{{STABLE_INSERTS, "true"}, {"memory_limit_mb", "5"}};
+
+      payload->compiler_.reset(new dictionary::JsonDictionaryCompilerSmallData(params));
+    }
+  }
+
   static inline void Compile(IndexPayload* payload) {
     if (!payload->compiler_) {
       TRACE("no compiler found");
@@ -419,6 +471,9 @@ class IndexWriterWorker final {
     }
 
     WriteToc(payload);
+
+    // reset as segments have been changed
+    payload->segments_weak_.reset();
   }
 
   static void WriteToc(const IndexPayload* payload) {

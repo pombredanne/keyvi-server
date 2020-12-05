@@ -1,4 +1,4 @@
-/* keyvi - A key value store.
+/* keyviserver - A key value store server based on keyvi.
  *
  * Copyright 2019 Hendrik Muhs<hendrik.muhs@gmail.com>
  *
@@ -26,36 +26,97 @@
 
 #include <brpc/closure_guard.h>
 #include <brpc/controller.h>
+#include <google/protobuf/map.h>
 
+#include <memory>
 #include <string>
-
-#include "keyvi_server/util/executable_finder.h"
 
 namespace keyvi_server {
 namespace service {
 
-IndexImpl::IndexImpl(std::string name)
-    : index_(name, {{KEYVIMERGER_BIN, util::ExecutableFinder::GetKeyviMergerBin()}}) {}
+IndexImpl::IndexImpl(const keyvi_server::core::data_backend_t &backend) : backend_(backend) {}
 
 IndexImpl::~IndexImpl() {}
 
-void IndexImpl::Get(google::protobuf::RpcController *cntl_base, const GetRequest *request, GetResponse *response,
-                    google::protobuf::Closure *done) {
+void IndexImpl::Info(google::protobuf::RpcController *cntl_base, const InfoRequest *request, InfoResponse *response,
+                     google::protobuf::Closure *done) {
   brpc::ClosureGuard done_guard(done);
   brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
-
-  keyvi::dictionary::Match match = index_[request->key()];
-
-  response->set_value(match.GetValueAsString());
-  cntl->response_attachment().append(cntl->request_attachment());
+  (*response->mutable_info())["version"] = "0.0.1";
 }
 
-void IndexImpl::Set(google::protobuf::RpcController *cntl_base, const SetRequest *request, SetResponse *response,
+void IndexImpl::Delete(google::protobuf::RpcController *cntl_base, const DeleteRequest *request,
+                       EmptyBodyResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+
+  backend_->GetIndex().Delete(request->key());
+}
+
+void IndexImpl::Contains(google::protobuf::RpcController *cntl_base, const ContainsRequest *request,
+                         ContainsResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+
+  response->set_contains(backend_->GetIndex().Contains(request->key()));
+}
+
+void IndexImpl::Get(google::protobuf::RpcController *cntl_base, const GetRequest *request,
+                    StringValueResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+
+  keyvi::dictionary::Match match = backend_->GetIndex()[request->key()];
+
+  response->set_value(match.GetValueAsString());
+}
+
+void IndexImpl::GetRaw(google::protobuf::RpcController *cntl_base, const GetRawRequest *request,
+                       StringValueResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+
+  keyvi::dictionary::Match match = backend_->GetIndex()[request->key()];
+
+  response->set_value(match.GetRawValueAsString());
+}
+
+void IndexImpl::Set(google::protobuf::RpcController *cntl_base, const SetRequest *request, EmptyBodyResponse *response,
                     google::protobuf::Closure *done) {
   brpc::ClosureGuard done_guard(done);
   brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
 
-  index_.Set(request->key(), request->value());
+  backend_->GetIndex().Set(request->key(), request->value());
+}
+
+void IndexImpl::MSet(google::protobuf::RpcController *cntl_base, const MSetRequest *request,
+                     EmptyBodyResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+  std::shared_ptr<google::protobuf::Map<std::string, std::string>> key_values =
+      std::make_shared<google::protobuf::Map<std::string, std::string>>();
+
+  // hack: cast to remove const and use map from request
+  MSetRequest *request_m = const_cast<MSetRequest *>(request);
+  (*request_m->mutable_key_values()).swap(*key_values.get());
+
+  backend_->GetIndex().MSet(key_values);
+}
+
+void IndexImpl::Flush(google::protobuf::RpcController *cntl_base, const FlushRequest *request,
+                      EmptyBodyResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+
+  backend_->GetIndex().Flush(request->asynchronous());
+}
+
+void IndexImpl::ForceMerge(google::protobuf::RpcController *cntl_base, const ForceMergeRequest *request,
+                           EmptyBodyResponse *response, google::protobuf::Closure *done) {
+  brpc::ClosureGuard done_guard(done);
+  brpc::Controller *cntl = static_cast<brpc::Controller *>(cntl_base);
+
+  backend_->GetIndex().ForceMerge(request->max_segments());
 }
 
 }  // namespace service

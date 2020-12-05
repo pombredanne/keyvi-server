@@ -46,16 +46,23 @@ DECLARE_string(discovery_api_addr);
 DECLARE_string(discovery_env);
 DECLARE_int32(discovery_renew_interval_s);
 
-// Defined in discovery_naming_service.cpp
-int ParseFetchsResult(const butil::IOBuf& buf,
-                      const char* service_name,
-                      std::vector<brpc::ServerNode>* servers);
-int ParseNodesResult(const butil::IOBuf& buf, std::string* server_addr);
-
 } // policy
 } // brpc
 
 namespace {
+
+bool IsIPListEqual(const std::set<butil::ip_t>& s1, const std::set<butil::ip_t>& s2) {
+    if (s1.size() != s2.size()) {
+        return false;
+    }
+    for (auto it1 = s1.begin(), it2 = s2.begin(); it1 != s1.end(); ++it1, ++it2) {
+        if (*it1 != *it2) {
+            return false;
+        }
+    }
+    return true;
+}
+
 TEST(NamingServiceTest, sanity) {
     std::vector<brpc::ServerNode> servers;
 
@@ -65,32 +72,39 @@ TEST(NamingServiceTest, sanity) {
 #endif
 
     brpc::policy::DomainNamingService dns;
-    ASSERT_EQ(0, dns.GetServers("brpc.baidu.com:1234", &servers));
-    ASSERT_EQ(1u, servers.size());
+    ASSERT_EQ(0, dns.GetServers("baidu.com:1234", &servers));
+    ASSERT_EQ(2u, servers.size());
     ASSERT_EQ(1234, servers[0].addr.port);
-    const butil::ip_t expected_ip = servers[0].addr.ip;
+    ASSERT_EQ(1234, servers[1].addr.port);
+    const std::set<butil::ip_t> expected_ips{servers[0].addr.ip, servers[1].addr.ip};
 
-    ASSERT_EQ(0, dns.GetServers("brpc.baidu.com", &servers));
-    ASSERT_EQ(1u, servers.size());
-    ASSERT_EQ(expected_ip, servers[0].addr.ip);
+    ASSERT_EQ(0, dns.GetServers("baidu.com", &servers));
+    ASSERT_EQ(2u, servers.size());
+    const std::set<butil::ip_t> ip_list1{servers[0].addr.ip, servers[1].addr.ip};
+    ASSERT_TRUE(IsIPListEqual(expected_ips, ip_list1));
     ASSERT_EQ(80, servers[0].addr.port);
+    ASSERT_EQ(80, servers[1].addr.port);
 
-    ASSERT_EQ(0, dns.GetServers("brpc.baidu.com:1234/useless1/useless2", &servers));
-    ASSERT_EQ(1u, servers.size());
-    ASSERT_EQ(expected_ip, servers[0].addr.ip);
+    ASSERT_EQ(0, dns.GetServers("baidu.com:1234/useless1/useless2", &servers));
+    ASSERT_EQ(2u, servers.size());
+    const std::set<butil::ip_t> ip_list2{servers[0].addr.ip, servers[1].addr.ip};
+    ASSERT_TRUE(IsIPListEqual(expected_ips, ip_list2));
     ASSERT_EQ(1234, servers[0].addr.port);
+    ASSERT_EQ(1234, servers[1].addr.port);
 
-    ASSERT_EQ(0, dns.GetServers("brpc.baidu.com/useless1/useless2", &servers));
-    ASSERT_EQ(1u, servers.size());
-    ASSERT_EQ(expected_ip, servers[0].addr.ip);
+    ASSERT_EQ(0, dns.GetServers("baidu.com/useless1/useless2", &servers));
+    ASSERT_EQ(2u, servers.size());
+    const std::set<butil::ip_t> ip_list3{servers[0].addr.ip, servers[1].addr.ip};
+    ASSERT_TRUE(IsIPListEqual(expected_ips, ip_list3));
     ASSERT_EQ(80, servers[0].addr.port);
+    ASSERT_EQ(80, servers[1].addr.port);
 
     const char *address_list[] =  {
         "10.127.0.1:1234",
         "10.128.0.1:1234",
         "10.129.0.1:1234",
         "localhost:1234",
-        "brpc.baidu.com:1234"
+        "baidu.com:1234"
     };
     butil::TempFile tmp_file;
     {
@@ -132,9 +146,9 @@ TEST(NamingServiceTest, invalid_port) {
 #endif
 
     brpc::policy::DomainNamingService dns;
-    ASSERT_EQ(-1, dns.GetServers("brpc.baidu.com:", &servers));
-    ASSERT_EQ(-1, dns.GetServers("brpc.baidu.com:123a", &servers));
-    ASSERT_EQ(-1, dns.GetServers("brpc.baidu.com:99999", &servers));
+    ASSERT_EQ(-1, dns.GetServers("baidu.com:", &servers));
+    ASSERT_EQ(-1, dns.GetServers("baidu.com:123a", &servers));
+    ASSERT_EQ(-1, dns.GetServers("baidu.com:99999", &servers));
 }
 
 TEST(NamingServiceTest, wrong_name) {
@@ -152,7 +166,7 @@ TEST(NamingServiceTest, wrong_name) {
         "10.128.0.1:",
         "10.128.0.1",
         "localhost:1234",
-        "brpc.baidu.com:1234",
+        "baidu.com:1234",
         "LOCAL:1234"
     };
     butil::TempFile tmp_file;
@@ -533,21 +547,6 @@ static std::string s_nodes_result = R"({
     ]
 })";
 
-
-TEST(NamingServiceTest, discovery_parse_function) {
-    std::vector<brpc::ServerNode> servers;
-    brpc::policy::DiscoveryNamingService dcns;
-    butil::IOBuf buf;
-    buf.append(s_fetchs_result);
-    ASSERT_EQ(0, brpc::policy::ParseFetchsResult(buf, "admin.test", &servers));
-    ASSERT_EQ((size_t)1, servers.size());
-    ASSERT_EQ(servers[0].tag, "{\"weight\":\"10\",\"cluster\":\"\"}");
-    buf.clear();
-    buf.append(s_nodes_result);
-    std::string server;
-    ASSERT_EQ(0, brpc::policy::ParseNodesResult(buf, &server));
-    ASSERT_EQ("127.0.0.1:8635", server);
-}
 
 class DiscoveryNamingServiceImpl : public test::DiscoveryNamingService {
 public:

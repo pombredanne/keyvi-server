@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 cmake_minimum_required(VERSION 2.8.10)
 project(redis_c++ C CXX)
 
@@ -20,6 +37,10 @@ set(CMAKE_PREFIX_PATH ${OUTPUT_PATH})
 
 include(FindThreads)
 include(FindProtobuf)
+
+find_path(GPERFTOOLS_INCLUDE_DIR NAMES gperftools/heap-profiler.h)
+find_library(GPERFTOOLS_LIBRARIES NAMES tcmalloc_and_profiler)
+include_directories(${GPERFTOOLS_INCLUDE_DIR})
 
 # Search for libthrift* by best effort. If it is not found and brpc is
 # compiled with thrift protocol enabled, a link error would be reported.
@@ -109,6 +130,7 @@ set(DYNAMIC_LIB
     ${CRYPTO_LIB}
     ${THRIFT_LIB}
     ${THRIFTNB_LIB}
+    ${GPERFTOOLS_LIBRARIES}
     dl
     )
 
@@ -128,7 +150,10 @@ endif()
 
 add_executable(redis_cli redis_cli.cpp)
 add_executable(redis_press redis_press.cpp)
+add_executable(redis_server redis_server.cpp)
 
 set(AUX_LIB readline ncurses)
+
 target_link_libraries(redis_cli ${BRPC_LIB} ${DYNAMIC_LIB} ${AUX_LIB})
-target_link_libraries(redis_press ${BRPC_LIB} ${DYNAMIC_LIB} ${AUX_LIB})
+target_link_libraries(redis_press ${BRPC_LIB} ${DYNAMIC_LIB})
+target_link_libraries(redis_server ${BRPC_LIB} ${DYNAMIC_LIB})

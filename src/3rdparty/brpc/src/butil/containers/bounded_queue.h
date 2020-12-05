@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Author: Ge,Jun (gejun@baidu.com)
 // Date: Sat Aug 18 12:42:16 CST 2012
 
 // A thread-unsafe bounded queue(ring buffer). It can push/pop from both
@@ -168,8 +167,9 @@ public:
     bool pop(T* item) {
         if (_count) {
             --_count;
-            *item = ((T*)_items)[_start];
-            ((T*)_items)[_start].~T();
+            T* const p = (T*)_items + _start;
+            *item = *p;
+            p->~T();
             _start = _mod(_start + 1, _cap);
             return true;
         }
@@ -181,7 +181,7 @@ public:
     bool pop_bottom() {
         if (_count) {
             --_count;
-            ((T*)_items + _start + _count)->~T();
+            ((T*)_items + _mod(_start + _count, _cap))->~T();
             return true;
         }
         return false;
@@ -192,8 +192,9 @@ public:
     bool pop_bottom(T* item) {
         if (_count) {
             --_count;
-            *item = ((T*)_items)[_start + _count];
-            ((T*)_items)[_start + _count].~T();
+            T* const p = (T*)_items + _mod(_start + _count, _cap);
+            *item = *p;
+            p->~T();
             return true;
         }
         return false;

@@ -17,7 +17,6 @@
 
 // bthread - A M:N threading library to make applications more concurrent.
 
-// Author: Ge,Jun (gejun@baidu.com)
 
 #include <queue>                           // heap functions
 #include "butil/scoped_lock.h"
@@ -368,11 +367,6 @@ void TimerThread::run() {
         bool pull_again = false;
         while (!tasks.empty()) {
             Task* task1 = tasks[0];  // the about-to-run task
-            if (task1->try_delete()) { // already unscheduled
-                std::pop_heap(tasks.begin(), tasks.end(), task_greater);
-                tasks.pop_back();
-                continue;
-            }
             if (butil::gettimeofday_us() < task1->run_time) {  // not ready yet.
                 break;
             }
@@ -407,9 +401,7 @@ void TimerThread::run() {
 
         // The realtime to wait for.
         int64_t next_run_time = std::numeric_limits<int64_t>::max();
-        if (tasks.empty()) {
-            next_run_time = std::numeric_limits<int64_t>::max();
-        } else {
+        if (!tasks.empty()) {
             next_run_time = tasks[0]->run_time;
         }
         // Similarly with the situation before running tasks, we check

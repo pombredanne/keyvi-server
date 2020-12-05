@@ -499,8 +499,8 @@ public:
         cntl->http_response().set_content_type("text/plain");
         brpc::StopStyle stop_style = (_nrep == std::numeric_limits<size_t>::max() 
                 ? brpc::FORCE_STOP : brpc::WAIT_FOR_STOP);
-        butil::intrusive_ptr<brpc::ProgressiveAttachment> pa(
-                cntl->CreateProgressiveAttachment(stop_style));
+        butil::intrusive_ptr<brpc::ProgressiveAttachment> pa
+            = cntl->CreateProgressiveAttachment(stop_style);
         if (pa == NULL) {
             cntl->SetFailed("The socket was just failed");
             return;
@@ -547,8 +547,8 @@ public:
         cntl->http_response().set_content_type("text/plain");
         brpc::StopStyle stop_style = (_nrep == std::numeric_limits<size_t>::max() 
                 ? brpc::FORCE_STOP : brpc::WAIT_FOR_STOP);
-        butil::intrusive_ptr<brpc::ProgressiveAttachment> pa(
-                cntl->CreateProgressiveAttachment(stop_style));
+        butil::intrusive_ptr<brpc::ProgressiveAttachment> pa
+            = cntl->CreateProgressiveAttachment(stop_style);
         if (pa == NULL) {
             cntl->SetFailed("The socket was just failed");
             return;
@@ -1292,7 +1292,7 @@ TEST_F(HttpTest, http2_header_after_data) {
         }
         {
             brpc::HPacker::Header header("content-length",
-                    butil::string_printf("%" PRIu64, data_buf.size()));
+                    butil::string_printf("%llu", (unsigned long long)data_buf.size()));
             hpacker.Encode(&header1_appender, header, options);
         }
         {
@@ -1436,7 +1436,7 @@ TEST_F(HttpTest, http2_handle_goaway_streams) {
     SerializeFrameHead(goawaybuf, 8, brpc::policy::H2_FRAME_GOAWAY, 0, 0);
     SaveUint32(goawaybuf + brpc::policy::FRAME_HEAD_SIZE, 0);
     SaveUint32(goawaybuf + brpc::policy::FRAME_HEAD_SIZE + 4, 0);
-    ASSERT_EQ(brpc::policy::FRAME_HEAD_SIZE + 8, ::write(servfd, goawaybuf, brpc::policy::FRAME_HEAD_SIZE + 8));
+    ASSERT_EQ((ssize_t)brpc::policy::FRAME_HEAD_SIZE + 8, ::write(servfd, goawaybuf, brpc::policy::FRAME_HEAD_SIZE + 8));
 
     // After receving GOAWAY, the callbacks in client should be run correctly.
     for (int i = 0; i < req_size; i++) {

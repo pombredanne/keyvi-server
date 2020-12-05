@@ -32,6 +32,7 @@
 
 #include "keyvi/index/constants.h"
 #include "keyvi/index/index.h"
+#include "keyvi/index/internal/segment.h"
 #include "keyvi/testing/index_mock.h"
 
 inline std::string get_keyvimerger_bin() {
@@ -45,6 +46,26 @@ inline std::string get_keyvimerger_bin() {
 
 namespace keyvi {
 namespace index {
+namespace unit_test {
+class IndexFriend {
+ public:
+  static internal::const_segments_t GetSegments(Index* index) {
+    // due to the friend declaration we can not use make_shared in this place
+    return index->payload_.Segments();
+  }
+
+  static bool Contains(const std::shared_ptr<internal::segment_vec_t>& segments, const std::string& key) {
+    for (auto it = segments->crbegin(); it != segments->crend(); it++) {
+      if ((*it)->GetDictionary()->Contains(key)) {
+        return !(*it)->IsDeleted(key);
+      }
+    }
+
+    return false;
+  }
+};
+}  // namespace unit_test
+
 BOOST_AUTO_TEST_SUITE(IndexTests)
 
 // basic writer test, re-usable for testing different parameters
@@ -78,8 +99,76 @@ BOOST_AUTO_TEST_CASE(basic_writer_default) {
   basic_writer_test({{KEYVIMERGER_BIN, get_keyvimerger_bin()}});
 }
 
+BOOST_AUTO_TEST_CASE(basic_writer_external_merge) {
+  basic_writer_test({{KEYVIMERGER_BIN, get_keyvimerger_bin()}, {SEGMENT_EXTERNAL_MERGE_KEY_THRESHOLD, "0"}});
+}
+
 BOOST_AUTO_TEST_CASE(basic_writer_simple_merge_policy) {
   basic_writer_test({{KEYVIMERGER_BIN, get_keyvimerger_bin()}, {MERGE_POLICY, "simple"}});
+}
+
+void basic_writer_bulk_test(const keyvi::util::parameters_t& params = keyvi::util::parameters_t()) {
+  using boost::filesystem::temp_directory_path;
+  using boost::filesystem::unique_path;
+
+  auto tmp_path = temp_directory_path();
+  tmp_path /= unique_path();
+  {
+    Index writer(tmp_path.string(), params);
+
+    key_values_ptr_t input_data = std::make_shared<key_value_vector_t>();
+    for (int i = 0; i < 100; ++i) {
+      input_data->push_back({"a" + std::to_string(i), "{\"id\":" + std::to_string(i) + "}"});
+    }
+
+    writer.MSet(input_data);
+    writer.Flush();
+
+    BOOST_CHECK(writer.Contains("a0"));
+    BOOST_CHECK(writer.Contains("a11"));
+    BOOST_CHECK(writer.Contains("a99"));
+
+    input_data->clear();
+    for (int i = 0; i < 10; ++i) {
+      input_data->push_back({"b", "{\"id\":" + std::to_string(i) + "}"});
+    }
+
+    writer.MSet(input_data);
+    writer.Flush();
+
+    std::shared_ptr<std::map<std::string, std::string>> input_data_map =
+        std::make_shared<std::map<std::string, std::string>>();
+
+    for (int i = 0; i < 10; ++i) {
+      input_data_map->emplace(std::make_pair("c" + std::to_string(i), "{\"id\":" + std::to_string(i) + "}"));
+    }
+
+    writer.MSet(input_data_map);
+    writer.Flush();
+
+    BOOST_CHECK(writer.Contains("a0"));
+    BOOST_CHECK(writer.Contains("b"));
+    BOOST_CHECK(writer.Contains("c5"));
+
+    // check that last one wins
+    dictionary::Match m = writer["b"];
+    BOOST_CHECK_EQUAL("{\"id\":9}", m.GetValueAsString());
+    m = writer["c5"];
+    BOOST_CHECK_EQUAL("{\"id\":5}", m.GetValueAsString());
+  }
+  boost::filesystem::remove_all(tmp_path);
+}
+
+BOOST_AUTO_TEST_CASE(basic_writer_bulk_default) {
+  basic_writer_bulk_test({{KEYVIMERGER_BIN, get_keyvimerger_bin()}});
+}
+
+BOOST_AUTO_TEST_CASE(basic_writer_bulk_external_merge) {
+  basic_writer_bulk_test({{KEYVIMERGER_BIN, get_keyvimerger_bin()}, {SEGMENT_EXTERNAL_MERGE_KEY_THRESHOLD, "0"}});
+}
+
+BOOST_AUTO_TEST_CASE(basic_writer_bulk_simple_merge_policy) {
+  basic_writer_bulk_test({{KEYVIMERGER_BIN, get_keyvimerger_bin()}, {MERGE_POLICY, "simple"}});
 }
 
 void bigger_feed_test(const keyvi::util::parameters_t& params = keyvi::util::parameters_t()) {
@@ -94,7 +183,7 @@ void bigger_feed_test(const keyvi::util::parameters_t& params = keyvi::util::par
     for (int i = 0; i < 10000; ++i) {
       writer.Set("a", "{\"id\":" + std::to_string(i) + "}");
       if (i % 50 == 0) {
-        writer.FlushAsync();
+        writer.Flush(true);
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
       }
     }
@@ -110,6 +199,13 @@ void bigger_feed_test(const keyvi::util::parameters_t& params = keyvi::util::par
 BOOST_AUTO_TEST_CASE(bigger_feed) {
   bigger_feed_test(
       {{"refresh_interval", "100"}, {KEYVIMERGER_BIN, get_keyvimerger_bin()}, {"max_concurrent_merges", "2"}});
+}
+
+BOOST_AUTO_TEST_CASE(bigger_feed_external_merge) {
+  bigger_feed_test({{"refresh_interval", "100"},
+                    {KEYVIMERGER_BIN, get_keyvimerger_bin()},
+                    {"max_concurrent_merges", "2"},
+                    {SEGMENT_EXTERNAL_MERGE_KEY_THRESHOLD, "0"}});
 }
 
 BOOST_AUTO_TEST_CASE(bigger_feed_simple_merge_policy) {
@@ -219,7 +315,7 @@ void index_with_deletes(const keyvi::util::parameters_t& params = keyvi::util::p
     for (int i = 0; i < 100; ++i) {
       index.Set("a" + std::to_string(i), "{\"id\":" + std::to_string(i) + "}");
     }
-    index.FlushAsync();
+    index.Flush(true);
 
     // delete keys, also some non-existing ones
     for (int i = 20; i < 120; ++i) {
@@ -274,6 +370,62 @@ BOOST_AUTO_TEST_CASE(index_delete_keys_defaults) {
 
 BOOST_AUTO_TEST_CASE(index_delete_keys_simple_merge_policy) {
   index_with_deletes({{"refresh_interval", "100"}, {KEYVIMERGER_BIN, get_keyvimerger_bin()}, {MERGE_POLICY, "simple"}});
+}
+
+BOOST_AUTO_TEST_CASE(segment_invalidation) {
+  using boost::filesystem::temp_directory_path;
+  using boost::filesystem::unique_path;
+
+  auto tmp_path = temp_directory_path();
+  tmp_path /= unique_path();
+  {
+    Index index(tmp_path.string());
+    int j = 0;
+
+    // push 100 key-value pairs in
+    key_values_ptr_t input_data = std::make_shared<key_value_vector_t>();
+    for (int i = 0; i < 100; ++i) {
+      input_data->push_back({"a" + std::to_string(j), "{\"id\":" + std::to_string(j) + "}"});
+      j++;
+    }
+
+    index.MSet(input_data);
+    index.Flush();
+
+    internal::const_segments_t segments = unit_test::IndexFriend::GetSegments(&index);
+
+    // push more data and let it merge behind the scenes
+    input_data = std::make_shared<key_value_vector_t>();
+    for (int i = 0; i < 1000; ++i) {
+      input_data->push_back({"a" + std::to_string(j), "{\"id\":" + std::to_string(j) + "}"});
+      j++;
+      if (i % 50 == 0) {
+        index.MSet(input_data);
+        index.Flush(true);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        input_data = std::make_shared<key_value_vector_t>();
+      }
+    }
+
+    index.MSet(input_data);
+    index.Flush();
+    index.ForceMerge();
+
+    BOOST_CHECK(index.Contains("a433"));
+    BOOST_CHECK(index.Contains("a4"));
+    BOOST_CHECK(index.Contains("a999"));
+    BOOST_CHECK(index.Contains("a222"));
+    BOOST_CHECK(index.Contains("a890"));
+    BOOST_CHECK(index.Contains("a579"));
+
+    BOOST_CHECK(unit_test::IndexFriend::Contains(segments, "a1"));
+    BOOST_CHECK(unit_test::IndexFriend::Contains(segments, "a22"));
+    BOOST_CHECK(unit_test::IndexFriend::Contains(segments, "a99"));
+    BOOST_CHECK(!unit_test::IndexFriend::Contains(segments, "a100"));
+    BOOST_CHECK(!unit_test::IndexFriend::Contains(segments, "a345"));
+  }
+
+  boost::filesystem::remove_all(tmp_path);
 }
 
 BOOST_AUTO_TEST_SUITE_END()

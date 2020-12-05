@@ -15,7 +15,6 @@
 // specific language governing permissions and limitations
 // under the License.
 
-// Authors: Rujie Jiang (jiangrujie@baidu.com)
 
 #ifndef  BRPC_POLICY_DOMAIN_NAMING_SERVICE_H
 #define  BRPC_POLICY_DOMAIN_NAMING_SERVICE_H
@@ -29,7 +28,8 @@ namespace policy {
 
 class DomainNamingService : public PeriodicNamingService {
 public:
-    DomainNamingService();
+    DomainNamingService(int default_port);
+    DomainNamingService() : DomainNamingService(80) {}
 
 private:
     int GetServers(const char *service_name,
@@ -44,6 +44,7 @@ private:
 private:
     std::unique_ptr<char[]> _aux_buf;
     size_t _aux_buf_len;
+    int _default_port;
 };
 
 }  // namespace policy

@@ -1,3 +1,20 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
 cmake_minimum_required(VERSION 2.8.10)
 project(brpc C CXX)
 
@@ -74,7 +91,7 @@ include_directories(
 )
 
 execute_process(
-    COMMAND bash -c "git rev-parse --short HEAD | tr -d '\n'"
+    COMMAND bash -c "${PROJECT_SOURCE_DIR}/tools/get_brpc_revision.sh ${PROJECT_SOURCE_DIR} | tr -d '\n'"
     OUTPUT_VARIABLE BRPC_REVISION
 )
 
@@ -84,9 +101,10 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
     if(NOT HAVE_CLOCK_GETTIME)
         set(DEFINE_CLOCK_GETTIME "-DNO_CLOCK_GETTIME_IN_MAC")
     endif()
+    set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} -Wno-deprecated-declarations -Wno-inconsistent-missing-override")
 endif()
 
-set(CMAKE_CPP_FLAGS "${DEFINE_CLOCK_GETTIME} -DBRPC_WITH_GLOG=${WITH_GLOG_VAL} -DGFLAGS_NS=${GFLAGS_NS}")
+set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} ${DEFINE_CLOCK_GETTIME} -DBRPC_WITH_GLOG=${WITH_GLOG_VAL} -DGFLAGS_NS=${GFLAGS_NS}")
 if(WITH_MESALINK)
     set(CMAKE_CPP_FLAGS "${CMAKE_CPP_FLAGS} -DUSE_MESALINK")
 endif()
@@ -113,16 +131,19 @@ use_cxx11()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     #required by butil/crc32.cc to boost performance for 10x
-    if(NOT (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.4))
+    if((CMAKE_SYSTEM_PROCESSOR MATCHES "(x86)|(X86)|(amd64)|(AMD64)") AND NOT (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 4.4))
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -msse4 -msse4.2")
+    elseif((CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64"))
+        # segmentation fault in libcontext
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-gcse")
     endif()
     if(NOT (CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0))
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-aligned-new")
     endif()
 endif()
 
-include(FindProtobuf)
-include(FindThreads)
+find_package(Protobuf REQUIRED)
+find_package(Threads REQUIRED)
 
 find_path(LEVELDB_INCLUDE_PATH NAMES leveldb/db.h)
 find_library(LEVELDB_LIB NAMES leveldb)
@@ -161,7 +182,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Darwin")
         )
 endif()
 
-include(FindOpenSSL)
+find_package(OpenSSL)
 
 include_directories(
         ${GFLAGS_INCLUDE_PATH}
@@ -265,7 +286,6 @@ set(BUTIL_SOURCES
     ${PROJECT_SOURCE_DIR}/src/butil/hash.cc
     ${PROJECT_SOURCE_DIR}/src/butil/lazy_instance.cc
     ${PROJECT_SOURCE_DIR}/src/butil/location.cc
-    ${PROJECT_SOURCE_DIR}/src/butil/md5.cc
     ${PROJECT_SOURCE_DIR}/src/butil/memory/aligned_memory.cc
     ${PROJECT_SOURCE_DIR}/src/butil/memory/ref_counted.cc
     ${PROJECT_SOURCE_DIR}/src/butil/memory/ref_counted_memory.cc

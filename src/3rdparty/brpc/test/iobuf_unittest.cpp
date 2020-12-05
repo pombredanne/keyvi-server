@@ -47,6 +47,7 @@ extern IOBuf::Block* get_tls_block_head();
 extern int get_tls_block_count();
 extern void remove_tls_block_chain();
 extern IOBuf::Block* acquire_tls_block();
+extern IOBuf::Block* share_tls_block();
 extern void release_tls_block_chain(IOBuf::Block* b);
 extern uint32_t block_cap(IOBuf::Block const* b);
 extern uint32_t block_size(IOBuf::Block const* b);
@@ -1369,7 +1370,7 @@ TEST_F(IOBufTest, cut_into_fd_with_offset_multithreaded) {
     for (int i = 0; i < number_per_thread * (int)ARRAY_SIZE(threads); ++i) {
         off_t offset = i * sizeof(int);
         butil::IOPortal in;
-        ASSERT_EQ(sizeof(int), in.pappend_from_file_descriptor(fd, offset, sizeof(int)));
+        ASSERT_EQ((ssize_t)sizeof(int), in.pappend_from_file_descriptor(fd, offset, sizeof(int)));
         int j;
         ASSERT_EQ(sizeof(j), in.cutn(&j, sizeof(j)));
         ASSERT_EQ(i, j);
@@ -1586,7 +1587,7 @@ static void my_free(void* m) {
 TEST_F(IOBufTest, append_user_data_and_consume) {
     butil::IOBuf b0;
     const int REP = 16;
-    const int len = REP * 256;
+    const size_t len = REP * 256;
     char* data = (char*)malloc(len);
     for (int i = 0; i < 256; ++i) {
         for (int j = 0; j < REP; ++j) {
@@ -1616,7 +1617,7 @@ TEST_F(IOBufTest, append_user_data_and_consume) {
 TEST_F(IOBufTest, append_user_data_and_share) {
     butil::IOBuf b0;
     const int REP = 16;
-    const int len = REP * 256;
+    const size_t len = REP * 256;
     char* data = (char*)malloc(len);
     for (int i = 0; i < 256; ++i) {
         for (int j = 0; j < REP; ++j) {
@@ -1633,7 +1634,7 @@ TEST_F(IOBufTest, append_user_data_and_share) {
     {
         butil::IOBuf bufs[256];
         for (int i = 0; i < 256; ++i) {
-            ASSERT_EQ(REP, b0.cutn(&bufs[i], REP));
+            ASSERT_EQ((size_t)REP, b0.cutn(&bufs[i], REP));
             ASSERT_EQ(len - (i+1) * REP, b0.size());
             if (i != 255) {
                 ASSERT_EQ(1UL, b0._ref_num());
@@ -1647,13 +1648,38 @@ TEST_F(IOBufTest, append_user_data_and_share) {
         ASSERT_EQ(NULL, my_free_params);
         for (int i = 0; i < 256; ++i) {
             std::string out = bufs[i].to_string();
-            ASSERT_EQ(REP, out.size());
+            ASSERT_EQ((size_t)REP, out.size());
             for (int j = 0; j < REP; ++j) {
                 ASSERT_EQ((char)i, out[j]);
             }
         }
     }
     ASSERT_EQ(data, my_free_params);
+}
+
+TEST_F(IOBufTest, share_tls_block) {
+    butil::iobuf::remove_tls_block_chain();
+    butil::IOBuf::Block* b = butil::iobuf::acquire_tls_block();
+    ASSERT_EQ(0, butil::iobuf::block_size(b));
+
+    butil::IOBuf::Block* b2 = butil::iobuf::share_tls_block();
+    butil::IOBuf buf;
+    for (size_t i = 0; i < butil::iobuf::block_cap(b2); i++) {
+        buf.push_back('x');
+    }
+    // after pushing to b2, b2 is full but it is still head of tls block.
+    ASSERT_NE(b, b2);
+    butil::iobuf::release_tls_block_chain(b);
+    ASSERT_EQ(b, butil::iobuf::share_tls_block());
+    // After releasing b, now tls block is b(not full) -> b2(full) -> NULL
+    for (size_t i = 0; i < butil::iobuf::block_cap(b); i++) {
+        buf.push_back('x');
+    }
+    // now tls block is b(full) -> b2(full) -> NULL
+    butil::IOBuf::Block* head_block = butil::iobuf::share_tls_block();
+    ASSERT_EQ(0, butil::iobuf::block_size(head_block));
+    ASSERT_NE(b, head_block);
+    ASSERT_NE(b2, head_block);
 }
 
 TEST_F(IOBufTest, acquire_tls_block) {
